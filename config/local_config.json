@@ -1,0 +1,115 @@
+{
+    "time_zone": "UTC",
+    "offset": "00:00:00",
+    "deque_maxlen": 1440,
+    "coin_param": {
+        "directional_momentum": {
+            "ADAUSDT": {
+                "coin_1": "ADAUSDT",
+                "start_parent_id": 10000001
+            },
+            "BTCUSDT": {
+                "coin_1": "BTCUSDT",
+                "start_parent_id": 10000001
+            }
+        },
+        "pair_relative_value": {
+            "BTC_AVAX": {
+                "coin_1": "BTCUSDT",
+                "coin_2": "AVAXUSDT",
+                "start_parent_id": 30000001
+            },
+            "ETH_SOL": {
+                "coin_1": "ETHUSDT",
+                "coin_2": "SOLUSDT",
+                "start_parent_id": 30000001
+            },
+            "BTC_BNB": {
+                "coin_1": "BTCUSDT",
+                "coin_2": "BNBUSDT",
+                "start_parent_id": 30000001
+            },
+            "BTC_ETH": {
+                "coin_1": "BTCUSDT",
+                "coin_2": "ETHUSDT",
+                "start_parent_id": 30000001
+            }
+        },
+        "pair_momentum": {
+            "BTC_AVAX": {
+                "coin_1": "BTCUSDT",
+                "coin_2": "AVAXUSDT",
+                "start_parent_id": 40000001
+            },
+            "ETH_SOL": {
+                "coin_1": "ETHUSDT",
+                "coin_2": "SOLUSDT",
+                "start_parent_id": 40000001
+            },
+            "BTC_ETH": {
+                "coin_1": "BTCUSDT",
+                "coin_2": "ETHUSDT",
+                "start_parent_id": 40000001
+            }
+        },
+        "pair_lead_lag": {
+            "BTC_AVAX": {
+                "coin_1": "BTCUSDT",
+                "coin_2": "AVAXUSDT",
+                "start_parent_id": 50000001
+            },
+            "ETH_SOL": {
+                "coin_1": "ETHUSDT",
+                "coin_2": "SOLUSDT",
+                "start_parent_id": 50000001
+            },
+            "BTC_BNB": {
+                "coin_1": "BTCUSDT",
+                "coin_2": "BNBUSDT",
+                "start_parent_id": 50000001
+            },
+            "BTC_ETH": {
+                "coin_1": "BTCUSDT",
+                "coin_2": "ETHUSDT",
+                "start_parent_id": 50000001
+            }
+        }
+    },
+    "sleeve_config": {
+        "directional_momentum": {
+            "strategy": "DMP_v3_2",
+            "params_path": "/home/rocky/crypto_sims/directional_momentum_production/params.json"
+        },
+        "pair_relative_value": {
+            "strategy": "QR1_v4",
+            "params_path": "/home/rocky/crypto_sims/pair_relative_value_production/params.json"
+        },
+        "pair_momentum": {
+            "strategy": "B1_v8_v10",
+            "params_path": "/home/rocky/crypto_sims/pair_momentum_production/params.json"
+        },
+        "pair_lead_lag": {
+            "strategy": "QR31_v2",
+            "params_path": "/home/rocky/crypto_sims/pair_lead_lag_production/params.json"
+        }
+    },
+    "fixed_cost_dict": {
+        "directional_momentum": 0.000115,
+        "pair_momentum": 0.000115,
+        "pair_lead_lag": 0.000115,
+        "pair_relative_value": 0.000115
+    },
+    "slippage_hlc3_dict": {
+        "ADAUSDT": 0.0001,
+        "BTCUSDT": 5.5e-05,
+        "AVAXUSDT": 0.0001,
+        "ETHUSDT": 5.5e-05,
+        "SOLUSDT": 0.0001,
+        "XRPUSDT": 0.0001,
+        "DOGEUSDT": 0.0001,
+        "LINKUSDT": 0.0001,
+        "BNBUSDT": 0.0001,
+        "DOTUSDT": 0.0001,
+        "UNIUSDT": 0.0001
+    }
+}
