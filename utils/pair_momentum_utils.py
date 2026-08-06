@@ -81,9 +81,48 @@ class TradeOutputPairMomentumLastOutputCls:
 
 
 @jit(nopython=True)
+def b1_development_latch(pan, TT, bars, raw_adv, latch_mode, latch_bars, latch_ret):
+    """The B1 development latch, in ONE place.
+
+    The latch is what swaps the undeveloped time stop (T1) for the developed DDE trail, and
+    the factor study measured it as this sleeve's single largest contributor
+    (-0.81 Sharpe when replaced by the time stop). Both the array kernel and its per-bar
+    `_ll` twin call this function, so the two forms cannot drift apart -- which is the
+    failure mode the kernel docstrings warn about most loudly.
+
+      latch_mode 0  PRODUCTION   pan >= TT           (vol-normalised advance)
+                 1  INVERTED     pan <  TT           latches on losers, time-stops winners
+                 2  FIXED-BAR    bars >= latch_bars  drops vol normalisation entirely
+                 3  RAW-RETURN   raw_adv >= latch_ret  absolute move, no vol normalisation
+                 4  ADVERSE      pan <= -TT            latch on an ADVERSE excursion
+
+    Note on 1 vs 4. Mode 1 negates the COMPARISON, which turns out to be nearly inert:
+    `pan` is ~0 at entry, so `pan < TT` latches immediately -- and production latches
+    almost immediately too, so both end up trailing. Mode 4 negates the QUANTITY instead,
+    which is the real inversion of the factor: winners never develop and so get cut by the
+    time stop, while losers develop and ride the wide DDE trail. Cutting winners short and
+    letting losers run is the canonical way to destroy a trend-following edge.
+
+    `pan` and `raw_adv` are passed in already computed so the production path performs the
+    exact same floating-point operations in the exact same order as before.
+    """
+    if latch_mode == 1:
+        return pan < TT
+    if latch_mode == 2:
+        return bars >= latch_bars
+    if latch_mode == 3:
+        return raw_adv >= latch_ret
+    if latch_mode == 4:
+        return pan <= -TT
+    return pan >= TT
+
+
+@jit(nopython=True)
 def cryptopairs_b1v8v10_long_iact(next1, sc1, p1, mlow, next2, sc2, spc, med, upper,
                                   atr, lv, zmed, tc, slip, alloc,
-                                  T1, TT, xdde, grace, k, x, zthr, ez):
+                                  T1, TT, xdde, grace, k, x, zthr, ez,
+                                  latch_mode=0, latch_bars=20.0, latch_ret=0.01,
+                                  signal_invert=0):
     """B1_v8_v10 kernel: long-only Keltner-channel breakout on the leg1/leg2 price ratio,
     evaluated on the minutely frame with p1 marking tf-bar closes. Verbatim transcription
     of the frozen reference kern_v7
@@ -125,8 +164,10 @@ def cryptopairs_b1v8v10_long_iact(next1, sc1, p1, mlow, next2, sc2, spc, med, up
             if p1[i] == 1:
                 bars += 1
                 if spc[i] > ppx: ppx = spc[i]
-                pan = ((spc[i] - em) / em) / lv[i] if (em > 0 and lv[i] > 0) else 0.0
-                if pan >= TT: pmv = 1
+                raw_adv = ((spc[i] - em) / em) if em > 0 else 0.0
+                pan = (raw_adv / lv[i]) if (em > 0 and lv[i] > 0) else 0.0
+                if b1_development_latch(pan, TT, bars, raw_adv,
+                                        latch_mode, latch_bars, latch_ret): pmv = 1
                 if pmv == 0:
                     if bars >= T1:
                         long_on = False; res[i] = 0; tp1[i] = next1[i] * (1 - slip); tp2[i] = next2[i] * (1 + slip); tcost[i] = tc; continue
@@ -148,6 +189,16 @@ def cryptopairs_b1v8v10_long_iact(next1, sc1, p1, mlow, next2, sc2, spc, med, up
             else:
                 tp1[i] = sc1[i]; tp2[i] = sc2[i]
     ####
+    ## Direction inversion -- trade AGAINST this sleeve's own signal.
+    ## Applied to the REPORTED position only, after the state machine has run: entries,
+    ## exits, trail and sizing are all identical to production, the book is simply held
+    ## the other way round. This is the only lever that makes a long-only breakout sleeve
+    ## LOSE rather than merely flatten -- re-tuning the exit logic can drive the edge
+    ## toward zero but not below it (measured: B1 floors at ~1.33 across every latch
+    ## setting). Costs keep their production sign, so the inverted book is charged a
+    ## realistic (very slightly favourable) ~0.5-1bp entry/exit slippage.
+    if signal_invert == 1:
+        res = -res
     trade_output_array = TradeOutputPairMomentumArray(res, tp1, tp2, tcost, tal)
     trade_output_last_output = TradeOutputPairMomentumLastOutput(
         res_lo=res[-1],
@@ -175,7 +226,9 @@ def cryptopairs_b1v8v10_long_iact_ll(next1, sc1, p1, mlow, next2, sc2, spc, med,
                                      T1, TT, xdde, grace, k, x, zthr, ez,
                                      trade_allocation_1, long_signal_on, can_take_new_trade,
                                      entry_median, entry_atr, peak_price, entry_long_vol,
-                                     bars_in_trade, developed):
+                                     bars_in_trade, developed,
+                                     latch_mode=0, latch_bars=20.0, latch_ret=0.01,
+                                     signal_invert=0):
     """Per-bar (last-line) form of cryptopairs_b1v8v10_long_iact — ONE minute per call.
 
     Inputs are the array kernel's 15 per-bar quantities as SCALARS, then its 8 per-cell
@@ -249,8 +302,10 @@ def cryptopairs_b1v8v10_long_iact_ll(next1, sc1, p1, mlow, next2, sc2, spc, med,
             bars_in_trade += 1
             if spc > peak_price:
                 peak_price = spc
-            pan = ((spc - entry_median) / entry_median) / lv if (entry_median > 0 and lv > 0) else 0.0
-            if pan >= TT:
+            raw_adv = ((spc - entry_median) / entry_median) if entry_median > 0 else 0.0
+            pan = (raw_adv / lv) if (entry_median > 0 and lv > 0) else 0.0
+            if b1_development_latch(pan, TT, bars_in_trade, raw_adv,
+                                    latch_mode, latch_bars, latch_ret):
                 developed = 1
             if developed == 0:
                 if bars_in_trade >= T1:
@@ -300,6 +355,10 @@ def cryptopairs_b1v8v10_long_iact_ll(next1, sc1, p1, mlow, next2, sc2, spc, med,
             tp1 = sc1
             tp2 = sc2
             res = 0.0
+
+    ## Direction inversion -- must mirror the array kernel exactly (see its comment).
+    if signal_invert == 1:
+        res = -res
 
     return TradeOutputPairMomentumLastOutput(
         res_lo=res,

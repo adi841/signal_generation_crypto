@@ -138,6 +138,32 @@ class TradeOutputPairLeadLagLastOutputCls:
 
 
 @jit(nopython=True)
+def qr31_z_atr_stop(z_ema, z_threshold, minutely_low, minutely_high, pivot_price,
+                    x_eff, atr2, stop_mode, stop_pct):
+    """The QR31 z-confirmed ATR stop, in ONE place.
+
+    Shared by the array kernel and its per-bar `_ll` twin so the two cannot drift apart.
+    The factor study measured this stop as the sleeve's largest contributor (-1.28 Sharpe,
+    MaxDD -2.2% -> -4.5% when removed) even though its own realized PnL is deeply negative
+    (-278 log units against +350 from the band exits) -- it realizes losses to prevent
+    worse ones, which is why it must be replaced rather than simply deleted.
+
+      stop_mode 0  PRODUCTION  (z_ema < z_thr) AND low  <= pivot*(1 - x_eff*atr2/100)
+                1  INVERTED    (z_ema > z_thr) AND high >= pivot*(1 + x_eff*atr2/100)
+                               -- stops out winners and holds losers
+                2  PLAIN-ATR   low <= pivot*(1 - x_eff*atr2/100)   (z-confirmation dropped)
+                3  FIXED-PCT   low <= pivot*(1 - stop_pct/100)     (vol-independent)
+    """
+    if stop_mode == 1:
+        return (z_ema > z_threshold) and (minutely_high >= pivot_price * (1 + x_eff * atr2 / 100))
+    if stop_mode == 2:
+        return minutely_low <= pivot_price * (1 - x_eff * atr2 / 100)
+    if stop_mode == 3:
+        return minutely_low <= pivot_price * (1 - stop_pct / 100)
+    return (z_ema < z_threshold) and (minutely_low <= pivot_price * (1 - x_eff * atr2 / 100))
+
+
+@jit(nopython=True)
 def cryptopairs_qr31v2_long_iact(
     next_close1, same_close1, tp, minutely_high, minutely_low, p1,
     next_close2, same_close2, txn_cost, m1, m2,
@@ -148,6 +174,7 @@ def cryptopairs_qr31v2_long_iact(
     arm_always, sec_off, clock_minutes, use_override, override_sig,
     sec_delay_min, sec_mode, arm_expiry_min,
     rearm_off, cooldown_min, arm_line,
+    stop_mode=0, stop_pct=2.0, signal_invert=0,
 ):
     """QR31_v2 kernel: long-only band-cycle mean reversion on the leg1/leg2 price ratio,
     evaluated on the minutely frame with p1 marking tf-bar closes. VERBATIM transcription
@@ -375,7 +402,9 @@ def cryptopairs_qr31v2_long_iact(
                     tradeprice2[i] = same_close2[i]
             else:
                 x_eff = x_atr * 1.5 if (sec_mode == 1 and second_trade_taken) else x_atr
-                z_atr_hit = (z_ema[i] < z_threshold) and (minutely_low[i] <= pivot_price * (1 - x_eff * atr2[i] / 100))
+                z_atr_hit = qr31_z_atr_stop(z_ema[i], z_threshold, minutely_low[i],
+                                            minutely_high[i], pivot_price, x_eff, atr2[i],
+                                            stop_mode, stop_pct)
                 corr_hit  = corr[i] < corr_threshold
 
                 if z_atr_hit or corr_hit:
@@ -448,6 +477,12 @@ def cryptopairs_qr31v2_long_iact(
         arm_state[i] = 1 if can_take_new_trade else 0
 
     ####
+    ## Direction inversion -- trade AGAINST this sleeve's own signal. Applied to the
+    ## REPORTED position only, after the state machine has run. Both tranches flip, so the
+    ## scale-in keeps its relationship to the first entry. Costs keep production sign.
+    if signal_invert == 1:
+        res = -res
+        res2 = -res2
     trade_output_array = TradeOutputPairLeadLagArray(
         res, res2, tradeprice1, tradeprice2, tradeprice3, tradeprice4,
         total_tc1, total_tc2, trade_allocation, exit_reason, arm_state,
@@ -507,6 +542,7 @@ def cryptopairs_qr31v2_long_iact_ll(
     pair1_traded_price_1, pair2_traded_price_1, virtual_p2, profit_target_1,
     traded_price1_1, traded_price2_1, traded_price3_1, traded_price4_1,
     bars_since_entry, bars_since_arm, bars_since_stop,
+    stop_mode=0, stop_pct=2.0, signal_invert=0,
 ):
     """Per-bar (last-line) form of cryptopairs_qr31v2_long_iact — ONE minute per call.
 
@@ -718,7 +754,9 @@ def cryptopairs_qr31v2_long_iact_ll(
                 tp2 = same_close2
         else:
             x_eff = x_atr * 1.5 if (sec_mode == 1 and second_trade_taken) else x_atr
-            z_atr_hit = (z_ema < z_threshold) and (minutely_low <= pivot_price * (1 - x_eff * atr2 / 100))
+            z_atr_hit = qr31_z_atr_stop(z_ema, z_threshold, minutely_low,
+                                        minutely_high, pivot_price, x_eff, atr2,
+                                        stop_mode, stop_pct)
             corr_hit = corr < corr_threshold
 
             if z_atr_hit or corr_hit:
@@ -788,6 +826,11 @@ def cryptopairs_qr31v2_long_iact_ll(
         tp4 = same_close2
         pair2_traded_price = 0.0
         # traded_price1/2 and pair1_traded_price carry (defaults above)
+
+    ## Direction inversion -- must mirror the array kernel exactly (see its comment).
+    if signal_invert == 1:
+        res = -res
+        res2 = -res2
 
     return TradeOutputPairLeadLagLastOutput(
         res_lo=res,

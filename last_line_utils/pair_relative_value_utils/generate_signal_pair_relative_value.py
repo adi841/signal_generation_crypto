@@ -13,6 +13,7 @@ from pytz import timezone
 from config.config_read import config_object
 
 from last_line_utils.pair_relative_value_utils.pair_relative_value_utils import PAIR_RELATIVE_VALUE_PARAM_TUPLE, plain_symbol
+from utils.pair_relative_value_utils import qr1_bandwidth_gate
 from utils.pair_relative_value_utils import cryptopairs_qr1v4_short_iact, TradeOutputPairRelativeValueLastOutputCls
 from shared_codes.utils.misc_utils import order_tag_generator
 
@@ -332,8 +333,16 @@ class GetPairsRelativeValueSignal:
         skew_ok = (mc['sk_gate'].fillna(0.0).to_numpy() >= 0.5)
         fbw = mc['f_bandwp'].to_numpy(dtype=np.float64)
 
-        # ---- entry signal: z-gate AND wide-band gate AND skew gate --------------------
-        msig = np.where((zn_m > float(tup.z_entry)) & skew_ok & (fbw > wmed), 1, -1
+        # ---- entry signal: z-gate AND band-width gate AND skew gate -------------------
+        # The band-width conjunct is selectable (see utils.pair_relative_value_utils.
+        # qr1_bandwidth_gate); gate_mode 0 reproduces `fbw > wmed` exactly. The SAME
+        # helper drives the live per-minute path, so batch and live cannot diverge.
+        bw_gate = qr1_bandwidth_gate(
+            fbw, wmed,
+            mc['atr'].to_numpy(dtype=np.float64), mc['atr2'].to_numpy(dtype=np.float64),
+            mc['corr'].fillna(1.0).to_numpy(dtype=np.float64), float(sc['C_THR']),
+            int(sc.get('bandwidth_gate_mode', 0)))
+        msig = np.where((zn_m > float(tup.z_entry)) & skew_ok & bw_gate, 1, -1
                         ).astype(np.float64)
 
         # ---- sizing: EV10 fast-vol allocation, IS-mean matched via kv; entry-quality
@@ -434,6 +443,8 @@ class GetPairsRelativeValueSignal:
             zn, float(tup.z_thr), float(tup.x_atr),
             corr, float(sc['C_THR']),
             float(tup.z_entry), skew_ok,
+            # direction inversion -- see utils.pair_relative_value_utils kernel comment
+            int(sc.get('signal_invert', 0)),
         )
 
         # Wrap last-bar state (incl. carried kernel state) for the orchestrator / live.

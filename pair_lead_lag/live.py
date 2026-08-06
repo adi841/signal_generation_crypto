@@ -371,6 +371,11 @@ class LiveStrategy(PairLeadLagSignalGenerator):
                 input_numba_cls.bars_since_entry_lo,
                 input_numba_cls.bars_since_arm_lo,
                 input_numba_cls.bars_since_stop_lo,
+
+                # z_atr stop selector. MUST match what the batch path passes
+                # (generate_signal_pair_lead_lag.py) or live and backtest diverge.
+                int(sc.get('stop_mode', 0)), float(sc.get('stop_pct', 2.0)),
+                int(sc.get('signal_invert', 0)),
             )
 
             output: TradeOutputPairLeadLagLastOutput

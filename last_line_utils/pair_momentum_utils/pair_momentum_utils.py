@@ -164,6 +164,16 @@ def build_pair_momentum_parameter_dict(coin1, coin2, params_path=PAIR_MOMENTUM_P
         "data_dir": data_dir,
         "rv_alloc_bounds_path": f"{EOD_OUTPUT_DIR}/rv_alloc_bounds.parquet",
         "r_state_path": f"{EOD_OUTPUT_DIR}/r_state_daily.parquet",
+        ## Development-latch selector -- see utils.pair_momentum_utils.b1_development_latch.
+        ## 0 reproduces production bit-for-bit. .get() with a default, NOT hard indexing:
+        ## frozen bundles predate these keys and a bare g["latch_mode"] would raise.
+        "latch_mode": int(g.get("latch_mode", 0)),
+        "latch_bars": float(g.get("latch_bars", 20.0)),
+        "latch_ret": float(g.get("latch_ret", 0.01)),
+        ## Direction inversion: 1 trades AGAINST this sleeve's own signal. This is the
+        ## only lever that makes the sleeve LOSE rather than merely flatten -- measured
+        ## Sharpe 2.136 -> -2.264. 0 = production.
+        "signal_invert": int(g.get("signal_invert", 0)),
     }
 
     tfs = [int(t) for t in payload["timeframes_minutes"]]
@@ -269,6 +279,13 @@ def build_pair_momentum_parameter_dict_from_db(db_rows, coin1, coin2, sleeve_pat
                 "data_dir": f"{os.path.dirname(params_path)}/data",
                 "rv_alloc_bounds_path": sleeve_paths["rv_alloc_bounds_path"],
                 "r_state_path": sleeve_paths["r_state_path"],
+                ## Development-latch selector. .get() with a default, NOT hard indexing:
+                ## the live submodel_parameters rows predate these keys, and a bare
+                ## mp["latch_mode"] would KeyError and take signal generation down.
+                "latch_mode": int(mp.get("latch_mode", 0)),
+                "latch_bars": float(mp.get("latch_bars", 20.0)),
+                "latch_ret": float(mp.get("latch_ret", 0.01)),
+                "signal_invert": int(mp.get("signal_invert", 0)),
             }
 
         tf = int(mp["tf"])

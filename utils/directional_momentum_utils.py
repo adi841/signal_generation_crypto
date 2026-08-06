@@ -106,11 +106,51 @@ class TradeOutputDirectionalMomentumLastOutputCls:
 
 
 @jit(nopython=True)
+def dmp_development_latch(adv, tier_thresh, bars, raw_adv, latch_mode, latch_bars, latch_ret):
+    """The DMP development latch, in ONE place.
+
+    Shared by all FOUR kernel forms (long/short x array/`_ll`), so they cannot drift apart.
+    The latch swaps the undeveloped time stop (T1) for the developed DDE trail, and the
+    factor study measured it as this sleeve's single largest contributor (-1.55 Sharpe when
+    replaced by the time stop) -- the largest single-factor dependence of the four sleeves.
+
+      latch_mode 0  PRODUCTION   adv >= tier_thresh   (vol-normalised advance)
+                 1  INVERTED     adv <  tier_thresh   latches on losers, time-stops winners
+                 2  FIXED-BAR    bars >= latch_bars   drops vol normalisation entirely
+                 3  RAW-RETURN   raw_adv >= latch_ret absolute move, no vol normalisation
+                 4  ADVERSE      adv <= -tier_thresh  latch on an ADVERSE excursion
+
+    Note on 1 vs 4. Mode 1 negates the COMPARISON, which is nearly inert here: `adv` is ~0
+    at entry so `adv < tier_thresh` latches immediately -- and production latches almost
+    immediately too. Mode 4 negates the QUANTITY, which is the real inversion: winners
+    never develop and get cut by the time stop, while losers develop and ride the wide DDE
+    trail. Cutting winners short and letting losers run is the canonical way to destroy a
+    trend-following edge.
+
+    `adv` is signed for the trade's direction by the caller (long: close-entry; short:
+    entry-close), so one implementation serves both sides. Both quantities arrive already
+    computed, so the production path performs identical floating-point operations in
+    identical order to before.
+    """
+    if latch_mode == 1:
+        return adv < tier_thresh
+    if latch_mode == 2:
+        return bars >= latch_bars
+    if latch_mode == 3:
+        return raw_adv >= latch_ret
+    if latch_mode == 4:
+        return adv <= -tier_thresh
+    return adv >= tier_thresh
+
+
+@jit(nopython=True)
 def cryptoasset_dmpv32_long_iact(next_close, same_close, p1, minutely_low, asset_close,
                                  median_line, upper_line, atr_eq, long_vol, z_median,
                                  txn_cost, slippage, allocation,
                                  time_exit_bars, tier_thresh, dd_eq_mult,
-                                 k_atr, x_stop_atr, z_stop_thresh, entry_z_thresh):
+                                 k_atr, x_stop_atr, z_stop_thresh, entry_z_thresh,
+                                 latch_mode=0, latch_bars=20.0, latch_ret=0.01,
+                                 signal_invert=0):
     """DMP_v3_2 LONG kernel: Keltner-channel breakout on a SINGLE asset, evaluated on the
     minutely frame with p1 marking tf-bar closes. Verbatim transcription of the frozen
     reference `kern_long` (crypto_sims/PRODUCTION/engines/core/vendored_b1_dmp.py:137-177).
@@ -155,8 +195,10 @@ def cryptoasset_dmpv32_long_iact(next_close, same_close, p1, minutely_low, asset
             if p1[i] == 1:
                 bars += 1
                 if asset_close[i] > peak: peak = asset_close[i]
-                adv = ((asset_close[i] - entry_med) / entry_med) / long_vol[i] if (entry_med > 0.0 and long_vol[i] > 0.0) else 0.0
-                if adv >= tier_thresh: moved = 1
+                raw_adv = ((asset_close[i] - entry_med) / entry_med) if entry_med > 0.0 else 0.0
+                adv = (raw_adv / long_vol[i]) if (entry_med > 0.0 and long_vol[i] > 0.0) else 0.0
+                if dmp_development_latch(adv, tier_thresh, bars, raw_adv,
+                                         latch_mode, latch_bars, latch_ret): moved = 1
                 if moved == 0:
                     if bars >= time_exit_bars:
                         on = False; res[i] = 0; tradeprice[i] = next_close[i] * (1 - slippage); total_tc[i] = txn_cost; continue
@@ -178,6 +220,14 @@ def cryptoasset_dmpv32_long_iact(next_close, same_close, p1, minutely_low, asset
             else:
                 tradeprice[i] = same_close[i]
     ####
+    ## Direction inversion -- trade AGAINST this sleeve's own signal. Applied to the
+    ## REPORTED position only, after the state machine has run: entries, exits and sizing
+    ## are identical to production, the book is simply held the other way round. Re-tuning
+    ## a sleeve's own exit logic drives its edge toward zero but not below it (measured:
+    ## DMP floors at ~0.95 across every latch setting); this is the lever that makes it
+    ## LOSE. Costs keep their production sign.
+    if signal_invert == 1:
+        res = -res
     trade_output_array = TradeOutputDirectionalMomentumArray(res, tradeprice, total_tc, trade_allocation)
     trade_output_last_output = TradeOutputDirectionalMomentumLastOutput(
         res_lo=res[-1],
@@ -202,7 +252,9 @@ def cryptoasset_dmpv32_short_iact(next_close, same_close, p1, minutely_high, ass
                                   median_line, lower_line, atr_eq, long_vol, z_median,
                                   txn_cost, slippage, allocation,
                                   time_exit_bars, tier_thresh, dd_eq_mult,
-                                  k_atr, x_stop_atr, z_stop_thresh, entry_z_thresh):
+                                  k_atr, x_stop_atr, z_stop_thresh, entry_z_thresh,
+                                  latch_mode=0, latch_bars=20.0, latch_ret=0.01,
+                                 signal_invert=0):
     """DMP_v3_2 SHORT kernel: the exact mirror of the long kernel. Verbatim transcription of
     the frozen reference `kern_short` (vendored_b1_dmp.py:180-221).
 
@@ -246,8 +298,10 @@ def cryptoasset_dmpv32_short_iact(next_close, same_close, p1, minutely_high, ass
             if p1[i] == 1:
                 bars += 1
                 if asset_close[i] < trough: trough = asset_close[i]
-                adv = ((entry_med - asset_close[i]) / entry_med) / long_vol[i] if (entry_med > 0.0 and long_vol[i] > 0.0) else 0.0
-                if adv >= tier_thresh: moved = 1
+                raw_adv = ((entry_med - asset_close[i]) / entry_med) if entry_med > 0.0 else 0.0
+                adv = (raw_adv / long_vol[i]) if (entry_med > 0.0 and long_vol[i] > 0.0) else 0.0
+                if dmp_development_latch(adv, tier_thresh, bars, raw_adv,
+                                         latch_mode, latch_bars, latch_ret): moved = 1
                 if moved == 0:
                     if bars >= time_exit_bars:
                         on = False; res[i] = 0; tradeprice[i] = next_close[i] * (1 + slippage); total_tc[i] = txn_cost; continue
@@ -269,6 +323,14 @@ def cryptoasset_dmpv32_short_iact(next_close, same_close, p1, minutely_high, ass
             else:
                 tradeprice[i] = same_close[i]
     ####
+    ## Direction inversion -- trade AGAINST this sleeve's own signal. Applied to the
+    ## REPORTED position only, after the state machine has run: entries, exits and sizing
+    ## are identical to production, the book is simply held the other way round. Re-tuning
+    ## a sleeve's own exit logic drives its edge toward zero but not below it (measured:
+    ## DMP floors at ~0.95 across every latch setting); this is the lever that makes it
+    ## LOSE. Costs keep their production sign.
+    if signal_invert == 1:
+        res = -res
     trade_output_array = TradeOutputDirectionalMomentumArray(res, tradeprice, total_tc, trade_allocation)
     trade_output_last_output = TradeOutputDirectionalMomentumLastOutput(
         res_lo=res[-1],
@@ -346,7 +408,9 @@ def cryptoasset_dmpv32_long_iact_ll(next_close, same_close, p1, minutely_low, as
                                     k_atr, x_stop_atr, z_stop_thresh, entry_z_thresh,
                                     trade_allocation_1, signal_on, can_take_new_trade,
                                     entry_median, entry_atr, extreme_price, entry_long_vol,
-                                    bars_in_trade, developed):
+                                    bars_in_trade, developed,
+                                    latch_mode=0, latch_bars=20.0, latch_ret=0.01,
+                                 signal_invert=0):
     """Per-bar form of cryptoasset_dmpv32_long_iact. `extreme_price` is the running PEAK."""
     # Defaults for a "no change this bar" minute; the branches below overwrite them.
     res = 0.0
@@ -372,8 +436,10 @@ def cryptoasset_dmpv32_long_iact_ll(next_close, same_close, p1, minutely_low, as
             bars_in_trade += 1
             if asset_close > extreme_price:
                 extreme_price = asset_close
-            adv = ((asset_close - entry_median) / entry_median) / long_vol if (entry_median > 0.0 and long_vol > 0.0) else 0.0
-            if adv >= tier_thresh:
+            raw_adv = ((asset_close - entry_median) / entry_median) if entry_median > 0.0 else 0.0
+            adv = (raw_adv / long_vol) if (entry_median > 0.0 and long_vol > 0.0) else 0.0
+            if dmp_development_latch(adv, tier_thresh, bars_in_trade, raw_adv,
+                                     latch_mode, latch_bars, latch_ret):
                 developed = 1
             if developed == 0:
                 if bars_in_trade >= time_exit_bars:
@@ -416,6 +482,10 @@ def cryptoasset_dmpv32_long_iact_ll(next_close, same_close, p1, minutely_low, as
             tradeprice = same_close
             res = 0.0
 
+    ## Direction inversion -- must mirror the array kernel exactly (see its comment).
+    if signal_invert == 1:
+        res = -res
+
     return TradeOutputDirectionalMomentumLastOutput(
         res_lo=res,
         tradeprice_lo=tradeprice,
@@ -441,7 +511,9 @@ def cryptoasset_dmpv32_short_iact_ll(next_close, same_close, p1, minutely_high, 
                                      k_atr, x_stop_atr, z_stop_thresh, entry_z_thresh,
                                      trade_allocation_1, signal_on, can_take_new_trade,
                                      entry_median, entry_atr, extreme_price, entry_long_vol,
-                                     bars_in_trade, developed):
+                                     bars_in_trade, developed,
+                                     latch_mode=0, latch_bars=20.0, latch_ret=0.01,
+                                 signal_invert=0):
     """Per-bar form of cryptoasset_dmpv32_short_iact. `extreme_price` is the running TROUGH
     (cold-start value SHORT_TROUGH_INIT = 1e18, not 0.0)."""
     # Defaults for a "no change this bar" minute; the branches below overwrite them.
@@ -468,8 +540,10 @@ def cryptoasset_dmpv32_short_iact_ll(next_close, same_close, p1, minutely_high, 
             bars_in_trade += 1
             if asset_close < extreme_price:
                 extreme_price = asset_close
-            adv = ((entry_median - asset_close) / entry_median) / long_vol if (entry_median > 0.0 and long_vol > 0.0) else 0.0
-            if adv >= tier_thresh:
+            raw_adv = ((entry_median - asset_close) / entry_median) if entry_median > 0.0 else 0.0
+            adv = (raw_adv / long_vol) if (entry_median > 0.0 and long_vol > 0.0) else 0.0
+            if dmp_development_latch(adv, tier_thresh, bars_in_trade, raw_adv,
+                                     latch_mode, latch_bars, latch_ret):
                 developed = 1
             if developed == 0:
                 if bars_in_trade >= time_exit_bars:
@@ -511,6 +585,10 @@ def cryptoasset_dmpv32_short_iact_ll(next_close, same_close, p1, minutely_high, 
         else:
             tradeprice = same_close
             res = 0.0
+
+    ## Direction inversion -- must mirror the array kernel exactly (see its comment).
+    if signal_invert == 1:
+        res = -res
 
     return TradeOutputDirectionalMomentumLastOutput(
         res_lo=res,

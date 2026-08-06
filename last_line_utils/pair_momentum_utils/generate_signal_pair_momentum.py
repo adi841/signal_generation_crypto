@@ -249,6 +249,12 @@ class GetPairsMomentumSignal:
             txn_cost, slippage, alloc,
             float(tup.T1), float(tup.TT), float(tup.DDE), float(sc['GRACE']),
             float(tup.K), float(tup.X), float(tup.Z), float(tup.EZ),
+            # development-latch selector -- see utils.pair_momentum_utils.
+            # b1_development_latch. 0 reproduces production exactly; .get() rather than
+            # hard-indexing because live rows in `submodel_parameters` predate these keys.
+            int(sc.get('latch_mode', 0)), float(sc.get('latch_bars', 20.0)),
+            float(sc.get('latch_ret', 0.01)),
+            int(sc.get('signal_invert', 0)),
         )
 
         # Wrap last-bar state (incl. carried kernel state) for the orchestrator / live.

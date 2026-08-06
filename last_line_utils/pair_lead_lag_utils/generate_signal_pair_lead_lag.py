@@ -335,6 +335,11 @@ class GetPairsLeadLagSignal:
             int(sc['use_override']), override_sig,
             int(sc['sec_delay_min']), int(sc['sec_mode']), int(sc['arm_expiry_min']),
             int(sc['rearm_off']), int(sc['cooldown_min']), upc,
+            # z_atr stop selector -- see utils.pair_lead_lag_utils.qr31_z_atr_stop.
+            # 0 reproduces production exactly; .get() rather than hard-indexing because
+            # live rows in `submodel_parameters` predate these keys.
+            int(sc.get('stop_mode', 0)), float(sc.get('stop_pct', 2.0)),
+            int(sc.get('signal_invert', 0)),
         )
 
         # Wrap last-bar state (incl. carried kernel state) for the orchestrator / live.

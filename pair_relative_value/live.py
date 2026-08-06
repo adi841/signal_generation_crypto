@@ -293,6 +293,9 @@ class LiveStrategy(PairRelativeValueSignalGenerator):
                 can_take_new_trade=input_numba_cls.can_take_new_trade,
                 entry_pair_price=input_numba_cls.entry_pair_price,
                 profit_target_1=input_numba_cls.profit_target_lo,
+                # direction inversion. MUST match what the batch path passes
+                # (generate_signal_pair_relative_value.py) or live and backtest diverge.
+                signal_invert=int(tup.strategy_config.get('signal_invert', 0)),
             )
 
             output: TradeOutputPairRelativeValueLastOutput

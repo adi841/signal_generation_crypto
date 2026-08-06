@@ -170,6 +170,13 @@ def build_pair_lead_lag_parameter_dict(coin1, coin2, params_path=PAIR_LEAD_LAG_P
         "activity_counts_path": f"{data_dir}/leadlag_activity_counts.parquet",
         "qr31_cell_constants_path": f"{EOD_OUTPUT_DIR}/qr31_cell_constants.parquet",
         "mult_daily_path": f"{EOD_OUTPUT_DIR}/mult_daily.parquet",
+        ## z_atr stop selector -- see utils.pair_lead_lag_utils.qr31_z_atr_stop.
+        ## 0 reproduces production bit-for-bit. .get(): frozen bundles predate these keys.
+        "stop_mode": int(g.get("stop_mode", 0)),
+        "stop_pct": float(g.get("stop_pct", 2.0)),
+        ## Direction inversion: 1 trades AGAINST this sleeve's own signal -- the only
+        ## lever that makes it LOSE rather than flatten (2.644 -> -3.636). 0 = production.
+        "signal_invert": int(g.get("signal_invert", 0)),
     }
 
     tfs = [int(t) for t in payload["timeframes_minutes"]]
@@ -284,6 +291,11 @@ def build_pair_lead_lag_parameter_dict_from_db(db_rows, coin1, coin2, sleeve_pat
                 "activity_counts_path": sleeve_paths["activity_counts_path"],
                 "qr31_cell_constants_path": sleeve_paths["qr31_cell_constants_path"],
                 "mult_daily_path": sleeve_paths["mult_daily_path"],
+                ## z_atr stop selector. .get() with a default, NOT hard indexing: the live
+                ## submodel_parameters rows predate these keys.
+                "stop_mode": int(mp.get("stop_mode", 0)),
+                "stop_pct": float(mp.get("stop_pct", 2.0)),
+                "signal_invert": int(mp.get("signal_invert", 0)),
             }
 
         tf = int(mp["tf"])

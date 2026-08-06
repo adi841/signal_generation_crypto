@@ -12,6 +12,7 @@ from collections import namedtuple
 from config.config_read import config_object
 from utils.utils import resample_stock_data
 from utils.pair_relative_value_utils import TradeOutputPairRelativeValueLastOutputCls
+from utils.pair_relative_value_utils import qr1_bandwidth_gate
 from shared_codes.utils.misc_utils import check_nan
 
 from .pair_relative_value_utils import (
@@ -675,8 +676,16 @@ class PAIR_RELATIVE_VALUE_PARENT_ID_STRAT_OBJ(PairRelativeValueBaseClass):
 
         # Entry gates -> msig (NaN zn was filled above; NaN band-width compares
         # False, matching the batch's array semantics).
-        msig_v = 1.0 if ((zn_v > float(self.tup.z_entry)) and sk_ok
-                         and (not np.isnan(fbw_v)) and (fbw_v > self.wmed)) else -1.0
+        # The band-width conjunct goes through the SAME helper the batch builder uses, so
+        # the two paths cannot drift; gate_mode 0 reproduces `fbw_v > self.wmed` exactly.
+        # NOTE: the old explicit `not isnan(fbw_v)` conjunct is deliberately GONE. The
+        # batch has no such guard -- it relies on NaN comparing False inside the gate
+        # itself. Keeping it here would be harmless at gate_mode 0 but would silently
+        # diverge from the batch at modes 2/3/4, which do not read f_bandwp at all.
+        bw_ok = bool(qr1_bandwidth_gate(fbw_v, self.wmed, atr_v, atr2_v, corr_v,
+                                        float(sc['C_THR']),
+                                        int(sc.get('bandwidth_gate_mode', 0))))
+        msig_v = 1.0 if ((zn_v > float(self.tup.z_entry)) and sk_ok and bw_ok) else -1.0
 
         # ---- allocation = EV10 vol-target x entry-quality score  [TODO(EXPO)] -----
         # Score features at the decision minute (active-line convention as above);

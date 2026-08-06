@@ -162,6 +162,14 @@ def build_pair_relative_value_parameter_dict(coin1, coin2,
         "annualization_days_PER": int(g["annualization_days_PER"]),
         "params_path": params_path,
         "data_dir": data_dir,
+        ## Band-width entry-gate selector -- see utils.pair_relative_value_utils.
+        ## qr1_bandwidth_gate. 0 reproduces production bit-for-bit. .get() with a default,
+        ## NOT hard indexing: frozen bundles predate this key.
+        "bandwidth_gate_mode": int(g.get("bandwidth_gate_mode", 0)),
+        ## Direction inversion: 1 trades AGAINST this sleeve's own signal (QR1 is
+        ## short-only, so this makes it long relative-value) -- the only lever that makes
+        ## it LOSE rather than flatten (3.270 -> -3.640). 0 = production.
+        "signal_invert": int(g.get("signal_invert", 0)),
     }
 
     tfs = [int(t) for t in payload["timeframes_minutes"]]
@@ -277,6 +285,10 @@ def build_pair_relative_value_parameter_dict_from_db(db_rows, coin1, coin2, slee
                 "annualization_days_PER": int(mp["annualization_days_per"]),
                 "params_path": params_path,      # provenance string; never opened here
                 "data_dir": data_dir,
+                ## Band-width entry-gate selector. .get() with a default, NOT hard
+                ## indexing: the live submodel_parameters rows predate this key.
+                "bandwidth_gate_mode": int(mp.get("bandwidth_gate_mode", 0)),
+                "signal_invert": int(mp.get("signal_invert", 0)),
             }
 
         tf = int(mp["tf"])

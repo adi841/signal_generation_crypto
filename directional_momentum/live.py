@@ -293,6 +293,13 @@ class LiveStrategy(DirectionalMomentumSignalGenerator):
                 input_numba_cls.entry_long_vol_lo,
                 input_numba_cls.bars_in_trade_lo,
                 input_numba_cls.developed_lo,
+
+                # development-latch selector. MUST match what the batch path passes
+                # (generate_signal_directional_momentum.py) or live and backtest diverge.
+                int(tup.strategy_config.get('latch_mode', 0)),
+                float(tup.strategy_config.get('latch_bars', 20.0)),
+                float(tup.strategy_config.get('latch_ret', 0.01)),
+                int(tup.strategy_config.get('signal_invert', 0)),
             )
 
             output: TradeOutputDirectionalMomentumLastOutput

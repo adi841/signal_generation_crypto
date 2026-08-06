@@ -2,6 +2,40 @@ import numpy as np
 from numba import jit
 from collections import namedtuple
 
+def qr1_bandwidth_gate(f_bandwp, wmed, atr_pct, atr2_pct, corr, c_thr, gate_mode):
+    """The QR1_v4 band-width ENTRY gate, in ONE place.
+
+    Shared by the batch signal builder (generate_signal_pair_relative_value.py) and the
+    live per-minute path (pair_relative_value_last_line_utils.py) so the two cannot drift
+    apart. Unlike the other three sleeves this factor lives OUTSIDE the numba kernel -- it
+    is one conjunct of `msig`, which the kernel then consumes as a single +/-1 array.
+
+    The factor study measured it as this sleeve's largest contributor (-0.95 Sharpe when
+    removed), and the kernel's own breach instrumentation shows the sleeve rejects 99.6%
+    of the setups it sees -- the entry gates do nearly all the work here.
+
+      gate_mode 0  PRODUCTION      f_bandwp >  wmed    (wide-band regime only)
+                1  INVERTED        f_bandwp <  wmed    trades exactly the narrow-band
+                                                       regime the strategy exists to avoid
+                2  OFF             always True         (ablation)
+                3  VOL-EXPANSION   atr_pct > atr2_pct  fast ATR above slow ATR
+                4  CORRELATION     corr > c_thr        revives the gate that is dead in
+                                                       production (C_THR = -1.0)
+
+    Works on scalars (live) and arrays (batch) alike. NaN compares False throughout, which
+    matches the production semantics of both paths.
+    """
+    if gate_mode == 1:
+        return np.less(f_bandwp, wmed)
+    if gate_mode == 2:
+        return np.full(np.shape(f_bandwp), True)
+    if gate_mode == 3:
+        return np.greater(atr_pct, atr2_pct)
+    if gate_mode == 4:
+        return np.greater(corr, c_thr)
+    return np.greater(f_bandwp, wmed)
+
+
 ## QR1_v4 (Pairs Relative Value) trade kernel outputs. DUAL-tranche SHORT stream on the
 ## leg1/leg2 ratio (short ratio = -leg1, +leg2, dollar-neutral): res / res2 (-1/0 per
 ## tranche), per-leg trade prices per tranche (tranche 1 fills tp1/tp2, scale-in tranche
@@ -103,7 +137,7 @@ def cryptopairs_qr1v4_short_iact(next_close1, same_close1, tp,
                                  slippage, allocation,
                                  z_ema, z_threshold, x_atr,
                                  corr, corr_threshold,
-                                 z_entry, skew_ok):
+                                 z_entry, skew_ok, signal_invert=0):
     """QR1_v4 kernel: SHORT relative-value fade on the leg1/leg2 price ratio, evaluated
     on the minutely frame with p1 marking tf-bar closes. Behavioural transcription of
     the frozen reference `qr1_instr` (crypto_sims/PRODUCTION/engines/core/kernel_qr1.py)
@@ -280,6 +314,12 @@ def cryptopairs_qr1v4_short_iact(next_close1, same_close1, tp,
             tradeprice3[i] = same_close1[i]; tradeprice4[i] = same_close2[i]
 
     ####
+    ## Direction inversion -- trade AGAINST this sleeve's own signal. Applied to the
+    ## REPORTED position only, after the state machine has run. Both tranches flip.
+    ## QR1 is short-only, so inverting makes it a long relative-value sleeve.
+    if signal_invert == 1:
+        res = -res
+        res2 = -res2
     trade_output_array = TradeOutputPairRelativeValueArray(
         res, res2, tradeprice1, tradeprice2, tradeprice3, tradeprice4,
         total_tc1, total_tc2, trade_allocation)
@@ -316,7 +356,7 @@ def cryptopairs_qr1v4_short_iact_ll(next_close1, same_close1, tp,
                                     corr, corr_threshold,
                                     trade_allocation_1,
                                     short_signal_on, second_signal_on, can_take_new_trade,
-                                    entry_pair_price, profit_target_1):
+                                    entry_pair_price, profit_target_1, signal_invert=0):
     """Per-bar (last-line) form of cryptopairs_qr1v4_short_iact: the same per-bar
     quantities as the array kernel but as SCALARS (with prev_middle_line /
     prev_upper_line supplied explicitly, since the p1==1 convention reads the previous
@@ -443,6 +483,11 @@ def cryptopairs_qr1v4_short_iact_ll(next_close1, same_close1, tp,
     else:
         short_on = False
         second_on = False
+
+    ## Direction inversion -- must mirror the array kernel exactly (see its comment).
+    if signal_invert == 1:
+        res = -res
+        res2 = -res2
 
     return TradeOutputPairRelativeValueLastOutput(
         res_lo=res,
